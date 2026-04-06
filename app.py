@@ -12,7 +12,6 @@ from openai import OpenAI
 # -------------------------
 # .env dosyasının içinde:
 # OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx
-load_dotenv(override=True)
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 

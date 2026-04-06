@@ -3,6 +3,7 @@ import os
 import pandas as pd
 import plotly.express as px
 from openai import OpenAI
+import re
 
 # -------------------------
 # OpenAI Client
@@ -14,7 +15,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # -------------------------
 st.set_page_config(page_title="🔥 A2 Writing Dashboard", page_icon="📝", layout="wide")
 st.title("🔥 A2 Semantic Writing Evaluator & Dashboard")
-st.write("Enter student writing (30–60 words) below and get AI evaluation with detailed feedback and class-level stats:")
+st.write("Enter student writing (any length) below and get AI evaluation with detailed feedback and class-level stats:")
 
 # Text input
 text = st.text_area("Student Writing", height=200)
@@ -28,11 +29,7 @@ if "results" not in st.session_state:
 # -------------------------
 def ai_evaluate(text):
     word_count = len(text.strip().split())
-    if word_count < 30:
-        return {"warning": "⚠️ Your text is too short (<30 words). Please write more."}
-    if word_count > 60:
-        return {"warning": "⚠️ Expected word count exceeded (>60 words)."}
-
+    
     prompt = f"""
 You are an experienced English teacher evaluating an A2-level student's writing.
 
@@ -52,18 +49,26 @@ Give:
 Student Writing:
 {text}
 """
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    ai_text = response.choices[0].message.content
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        ai_text = response.choices[0].message.content
 
-    # Basit regex ile score çekebiliriz (isteğe göre geliştirilebilir)
-    import re
-    score_match = re.search(r"Score\s*out\s*of\s*20\s*:\s*(\d+)", ai_text)
-    score = int(score_match.group(1)) if score_match else None
+        # Score extraction
+        score_match = re.search(r"Score\s*out\s*of\s*20\s*:\s*(\d+)", ai_text)
+        score = int(score_match.group(1)) if score_match else None
 
-    return {"feedback": ai_text, "word_count": word_count, "score": score}
+        # CEFR extraction
+        grade_match = re.search(r"CEFR grade\s*[:\-]\s*([A-E])", ai_text, re.IGNORECASE)
+        grade = grade_match.group(1).upper() if grade_match else None
+
+        return {"feedback": ai_text, "word_count": word_count, "score": score, "grade": grade}
+
+    except Exception as e:
+        st.error(f"⚠️ AI evaluation failed: {e}")
+        return {"feedback": None, "word_count": word_count, "score": None, "grade": None}
 
 # -------------------------
 # Evaluate Button
@@ -72,19 +77,25 @@ if st.button("Evaluate with AI"):
     if text.strip():
         with st.spinner("AI is evaluating..."):
             result = ai_evaluate(text)
-        if "warning" in result:
-            st.warning(result["warning"])
-        else:
+
+        # Word count warnings
+        if result["word_count"] < 30:
+            st.warning("⚠️ Your text is short (<30 words). AI evaluation still provided.")
+        if result["word_count"] > 60:
+            st.warning("⚠️ Expected word count exceeded (>60 words). AI evaluation still provided.")
+
+        if result["feedback"]:
             st.subheader("📊 AI Evaluation Result")
             st.text(result["feedback"])
-            st.success(f"Word count: {result['word_count']} | Score: {result['score']}")
+            st.success(f"Word count: {result['word_count']} | Score: {result['score']} | CEFR Grade: {result['grade']}")
 
             # Save to session state
             st.session_state.results.append({
                 "text": text,
                 "feedback": result["feedback"],
                 "word_count": result["word_count"],
-                "score": result["score"]
+                "score": result["score"],
+                "grade": result["grade"]
             })
     else:
         st.warning("Please write some text first!")
@@ -100,26 +111,27 @@ if st.session_state.results:
     fig_wc = px.histogram(df, x="word_count", nbins=10, title="Word Count Distribution")
     st.plotly_chart(fig_wc, use_container_width=True)
 
-    # Score histogram with colors
-    def score_color(s):
-        if s <= 10:
-            return "red"
-        elif s <= 15:
-            return "orange"
-        else:
-            return "green"
+    # CEFR grade histogram with colors
+    cefr_colors = {
+        "A": "green",
+        "B": "lime",
+        "C": "orange",
+        "D": "red",
+        "E": "darkred",
+        None: "gray"
+    }
+    df["color"] = df["grade"].apply(lambda g: cefr_colors.get(g, "gray"))
 
-    df["color"] = df["score"].apply(score_color)
-    fig_score = px.histogram(df, x="score", nbins=20, title="Score Distribution", color="color",
-                             color_discrete_map={"red":"red","orange":"orange","green":"green"})
-    st.plotly_chart(fig_score, use_container_width=True)
+    fig_grade = px.histogram(df, x="grade", title="CEFR Grade Distribution", color="color",
+                             color_discrete_map=cefr_colors)
+    st.plotly_chart(fig_grade, use_container_width=True)
 
     # Average score
-    avg_score = df["score"].mean()
+    avg_score = df["score"].dropna().mean()
     st.metric("⭐ Average Score", f"{avg_score:.2f}/20")
 
     # Feedback table
-    st.dataframe(df[["text", "word_count", "score", "feedback"]])
+    st.dataframe(df[["text", "word_count", "score", "grade", "feedback"]])
 
     # Export CSV
     csv = df.to_csv(index=False).encode('utf-8')
